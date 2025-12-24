@@ -9,13 +9,12 @@ FRAME_WIDTH = 360
 FRAME_HEIGHT = 240
 
 # Налаштування PID контролера [Kp, Ki, Kd]
-PID_COEFFICIENTS = [0.4, 0.4, 0]
+# MediaPipe дає стабільніші координати, тому Kp можна трохи підняти
+PID_COEFFICIENTS = [0.5, 0.4, 0]
 
-# Діапазон площі обличчя для дистанції [min, max]
-FACE_AREA_RANGE = [6200, 6800]
+# Діапазон площі обличчя [min, max]
+# Оскільки ми будемо рахувати площу по-іншому (через точки), діапазон зміниться
+FACE_AREA_RANGE = [6000, 7500]
 
-# Швидкість ручного керування (0-100)
-MANUAL_SPEED = 50  # <-- НОВЕ
-
-# Шляхи до файлів
-CASCADE_PATH = "haarcascade_frontalface_default.xml"
+# Швидкість ручного керування
+MANUAL_SPEED = 50
