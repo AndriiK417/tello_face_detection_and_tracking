@@ -1,15 +1,12 @@
+import cvzone
+from cvzone.FaceMeshModule import FaceMeshDetector
 import cv2
-import numpy as np
 import config
 
 class FaceTracker:
     def __init__(self):
-        # Завантажуємо каскад Хаара
-        # Використовуємо шлях з конфігу або системний шлях OpenCV
-        self.faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + config.CASCADE_PATH)
-        if self.faceCascade.empty():
-             # Якщо файл не знайдено у папці, пробуємо стандартний з бібліотеки
-             self.faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        # cvzone сам налаштовує MediaPipe "під капотом"
+        self.detector = FaceMeshDetector(maxFaces=1)
         
         self.pid = config.PID_COEFFICIENTS
         self.pError = 0
@@ -18,59 +15,58 @@ class FaceTracker:
         self.fbRange = config.FACE_AREA_RANGE
 
     def find_face(self, img):
-        """Знаходить обличчя на зображенні"""
-        imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = self.faceCascade.detectMultiScale(imgGray, 1.1, 4)
+        # cvzone робить всю магію одним рядком
+        img, faces = self.detector.findFaceMesh(img, draw=True)
         
-        myFaceListC = []
-        myFaceListArea = []
+        info = [[0, 0], 0]
+        
+        if faces:
+            face = faces[0]
+            # Точка 10 (лоб) і 152 (підборіддя) для висоти
+            # Точка 234 (ліво) і 454 (право) для ширини
+            left = face[234]
+            right = face[454]
+            top = face[10]
+            bottom = face[152]
 
-        for (x, y, w, h) in faces:
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cx = x + w // 2
-            cy = y + h // 2
-            area = w * h
-            myFaceListC.append([cx, cy])
-            myFaceListArea.append(area)
-            cv2.putText(img, f"Area: {area}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        if len(myFaceListArea) != 0:
-            i = myFaceListArea.index(max(myFaceListArea))
-            return img, [myFaceListC[i], myFaceListArea[i]]
-        else:
-            return img, [[0, 0], 0]
+            # Центр
+            cx, cy = face[1] # Точка 1 - кінчик носа (центр)
+            
+            # Площа (приблизно як ширина * висоту)
+            w_face = right[0] - left[0]
+            h_face = bottom[1] - top[1]
+            area = w_face * h_face
+            
+            cv2.putText(img, f"Area: {area}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            info = [[cx, cy], area]
+
+        return img, info
 
     def calculate_pid(self, info):
-        """Розраховує керуючі команди на основі PID"""
+        # Ця частина не змінюється
         area = info[1]
         x, y = info[0]
         fb = 0 
         yaw = 0 
         
-        # Розрахунок помилки для повороту
         error = x - self.w // 2
-        
-        # PID формула
         yaw = self.pid[0] * error + self.pid[1] * (error - self.pError)
-        yaw = int(np.clip(yaw, -100, 100))
         
-        # Мертва зона (щоб не сіпався при дрібних відхиленнях)
+        # Обмежуємо (clamping)
+        if yaw > 100: yaw = 100
+        elif yaw < -100: yaw = -100
+        else: yaw = int(yaw)
+        
         if -15 < error < 15: 
             yaw = 0
             error = 0
             
         self.pError = error
 
-        # Розрахунок дистанції (Forward/Back)
         if area != 0: 
-            if area < self.fbRange[0]:
-                fb = 25
-            elif area > self.fbRange[1]:
-                fb = -25
+            if area < self.fbRange[0]: fb = 25
+            elif area > self.fbRange[1]: fb = -25
         
-        # Якщо обличчя немає
-        if x == 0:
-            yaw = 0
-            fb = 0
+        if x == 0: yaw = 0; fb = 0
             
         return yaw, fb
