@@ -7,7 +7,7 @@ from djitellopy import Tello
 
 # Імпорт наших модулів
 import config
-from drone_utils import VideoGrabber
+from videograbber import VideoGrabber
 from tracker import FaceTracker
 
 class MainWindow:
