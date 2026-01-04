@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox  # <-- ДОДАНО: Для спливаючих вікон
+from tkinter import messagebox
 from PIL import Image, ImageTk
 import cv2
 import time
@@ -20,7 +20,8 @@ class MainWindow:
         self.grabber = None
         self.tello = Tello(host=config.DRONE_IP)
         
-        self.is_rotation_active = False
+        # Перейменували прапорець для ясності
+        self.is_face_tracking_active = False # Відповідає за Yaw + Up/Down
         self.is_distance_active = False
         self.is_flying = False
 
@@ -52,18 +53,17 @@ class MainWindow:
         self.btn_land = tk.Button(controls_frame, text="ПОСАДКА", bg="red", fg="white", command=self.land, **btn_opts)
         self.btn_land.pack(side=tk.LEFT, padx=5)
 
-        self.btn_yaw = tk.Button(controls_frame, text="Увімк. Повороти", bg="gray", command=self.toggle_yaw, **btn_opts)
-        self.btn_yaw.pack(side=tk.LEFT, padx=5)
+        # ОНОВЛЕНА КНОПКА
+        self.btn_track = tk.Button(controls_frame, text="Відстеження обличчя", bg="gray", command=self.toggle_tracking, **btn_opts)
+        self.btn_track.pack(side=tk.LEFT, padx=5)
 
         self.btn_dist = tk.Button(controls_frame, text="Увімк. Наближення", bg="gray", command=self.toggle_dist, **btn_opts)
         self.btn_dist.pack(side=tk.LEFT, padx=5)
 
-        # Нова кнопка ІНФО
         self.btn_info = tk.Button(controls_frame, text="Інфо", bg="#007acc", fg="white", command=self.show_help, **btn_opts)
         self.btn_info.pack(side=tk.LEFT, padx=5)
 
     def show_help(self):
-        """Функція для відображення інструкції"""
         help_text = """
         🎮 ІНСТРУКЦІЯ З КЕРУВАННЯ:
 
@@ -73,12 +73,12 @@ class MainWindow:
         • Shift  — Піднятися Вгору
         • Ctrl   — Опуститися Вниз
 
-        ⚠️ ВАЖЛИВО:
-        Натискання клавіш має пріоритет над автопілотом.
-        Якщо ви натискаєте кнопки, дрон слухає ВАС, а не камеру.
+        ⚠️ АВТОПІЛОТ:
+        • "Відстеження обличчя" керує поворотами ТА висотою.
+        • "Наближення" керує відстанню до обличчя.
+        • Ручне керування має пріоритет.
         """
         messagebox.showinfo("Як керувати дроном", help_text)
-        # Повертаємо фокус на відео, щоб клавіатура працювала далі
         self.video_label.focus_set()
 
     def setup_input(self):
@@ -135,7 +135,9 @@ class MainWindow:
                 frame_resized = cv2.resize(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
                 frame_processed, info = self.tracker.find_face(frame_resized)
                 
-                pid_yaw, pid_fb = self.tracker.calculate_pid(info)
+                # Отримуємо 3 значення (Yaw, FB, UD)
+                pid_yaw, pid_fb, pid_ud = self.tracker.calculate_pid(info)
+                
                 man_lr, man_fb, man_ud, man_yaw = self.get_manual_command()
 
                 final_lr = man_lr
@@ -143,11 +145,20 @@ class MainWindow:
                 final_fb = man_fb
                 final_yaw = man_yaw
 
-                if final_fb == 0 and self.is_distance_active:
-                    final_fb = pid_fb
+                # --- ЛОГІКА АВТОПІЛОТА ---
                 
-                if final_yaw == 0 and self.is_rotation_active:
-                    final_yaw = pid_yaw
+                # 1. Відстеження обличчя (Поворот + Висота)
+                if self.is_face_tracking_active:
+                    # Якщо немає ручної команди повороту -> беремо PID
+                    if final_yaw == 0:
+                        final_yaw = pid_yaw
+                    # Якщо немає ручної команди висоти -> беремо PID
+                    if final_ud == 0:
+                        final_ud = pid_ud
+
+                # 2. Наближення (Вперед/Назад)
+                if self.is_distance_active and final_fb == 0:
+                    final_fb = pid_fb
 
                 if self.is_flying:
                     self.tello.send_rc_control(final_lr, final_fb, final_ud, final_yaw)
@@ -169,7 +180,7 @@ class MainWindow:
         except: pass
 
     def land(self):
-        self.is_rotation_active = False
+        self.is_face_tracking_active = False
         self.is_distance_active = False
         self.update_btns()
         try:
@@ -177,8 +188,8 @@ class MainWindow:
             self.is_flying = False
         except: pass
 
-    def toggle_yaw(self):
-        self.is_rotation_active = not self.is_rotation_active
+    def toggle_tracking(self):
+        self.is_face_tracking_active = not self.is_face_tracking_active
         self.update_btns()
 
     def toggle_dist(self):
@@ -186,11 +197,16 @@ class MainWindow:
         self.update_btns()
 
     def update_btns(self):
-        color_yaw = "orange" if self.is_rotation_active else "gray"
-        self.btn_yaw.config(bg=color_yaw)
+        # Оновлення кнопок
+        if self.is_face_tracking_active:
+            self.btn_track.config(bg="orange", text="ВИМК. Відстеження")
+        else:
+            self.btn_track.config(bg="gray", text="Відстеження обличчя")
 
-        color_dist = "orange" if self.is_distance_active else "gray"
-        self.btn_dist.config(bg=color_dist)
+        if self.is_distance_active:
+            self.btn_dist.config(bg="orange", text="ВИМК. Наближення")
+        else:
+            self.btn_dist.config(bg="gray", text="Увімк. Наближення")
 
     def close(self):
         if self.grabber:
