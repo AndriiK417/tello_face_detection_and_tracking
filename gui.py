@@ -43,8 +43,8 @@ class MainWindow:
         self.video_label.pack(pady=10)
         self.video_label.focus_set()
 
-        # Інфо панель
-        self.info_label = tk.Label(self.window, text="Керування: WASD, Shift/Ctrl, Q/E", font=("Arial", 12))
+        # Інфо панель (Додано про Пробіл)
+        self.info_label = tk.Label(self.window, text="Керування: WASD, Shift/Ctrl, Space - Посадка", font=("Arial", 12))
         self.info_label.pack(pady=5)
 
         # Панель кнопок
@@ -89,7 +89,7 @@ class MainWindow:
             if frame is not None:
                 frame_resized = cv2.resize(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
                 
-                # --- ПОШУК ОБЛИЧЧЯ (передаємо прапорець сітки) ---
+                # --- ПОШУК ОБЛИЧЧЯ ---
                 frame_processed, info = self.tracker.find_face(frame_resized, draw_mesh=self.show_mesh)
                 
                 # PID розрахунки
@@ -132,7 +132,7 @@ class MainWindow:
                 self.tello.streamoff()
                 self.tello.streamon()
                 bat = self.tello.get_battery()
-                self.info_label.config(text=f"Батарея: {bat}% | Керування: WASD")
+                self.info_label.config(text=f"Батарея: {bat}% | Керування: WASD, Space")
                 print("Запуск відео...")
                 time.sleep(1)
                 self.grabber = VideoGrabber(config.UDP_VIDEO_ADDRESS).start()
@@ -146,7 +146,13 @@ class MainWindow:
         self.window.bind("<KeyRelease>", self.key_up)
 
     def key_down(self, event):
-        self.pressed_keys.add(event.keysym.lower())
+        key = event.keysym.lower()
+        self.pressed_keys.add(key)
+        
+        # --- НОВА ЛОГІКА: Екстрена посадка на ПРОБІЛ ---
+        if key == 'space':
+            print("Екстрена посадка!")
+            self.land()
 
     def key_up(self, event):
         key = event.keysym.lower()
@@ -212,6 +218,7 @@ class MainWindow:
         • A / D  — Вліво / Вправо
         • Q / E  — Поворот
         • Shift / Ctrl — Висота
+        • ПРОБІЛ (Space) — Посадка
 
         Пріоритет у кнопок. Якщо не тиснеш кнопки — працює автопілот.
         """
