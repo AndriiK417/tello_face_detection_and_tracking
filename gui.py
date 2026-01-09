@@ -5,6 +5,7 @@ import cv2
 import time
 import threading
 import math
+import numpy as np 
 from djitellopy import Tello
 
 import config
@@ -14,25 +15,30 @@ from tracker import FaceTracker
 class MainWindow:
     def __init__(self, root):
         self.window = root
-        self.window.title("DJI Tello: Smart Tracking")
+        self.window.title("DJI Tello: Vector Biometrics")
         self.window.geometry("900x650")
 
         self.tracker = FaceTracker()
         self.grabber = None
         self.tello = Tello(host=config.DRONE_IP)
         
-        # --- СТАН СИСТЕМИ ---
+        # --- СТАН ---
         self.is_distance_active = False
         self.is_flying = False
         self.show_mesh = True 
         
-        # --- ЛОГІКА ЗАХОПЛЕННЯ ЦІЛІ ---
+        # --- ПАМ'ЯТЬ ---
         self.locked_face_center = None 
-        self.locked_face_area = 0      # <-- НОВЕ: Запам'ятовуємо розмір обличчя
-        self.is_tracking_locked = False
+        self.locked_face_area = 0      
+        self.locked_signature = None   
         
-        # Лічильник кадрів втрати цілі
-        self.lost_target_frames = 0    # <-- НОВЕ: Скільки кадрів ми не бачимо ціль
+        self.is_tracking_locked = False
+        self.lost_target_frames = 0    
+        
+        # Калібрування (збираємо середнє за 20 кадрів)
+        self.is_calibrating = False
+        self.calibration_data = []
+        self.calibration_frames_target = 20
 
         self.pressed_keys = set()
 
@@ -49,7 +55,7 @@ class MainWindow:
         self.video_label.bind("<Button-1>", self.on_mouse_click)
         self.video_label.bind("<Button-3>", self.cancel_tracking)
 
-        self.info_label = tk.Label(self.window, text="ЛКМ - Захопити ціль | ПКМ - Скинути | Space - Посадка", font=("Arial", 11))
+        self.info_label = tk.Label(self.window, text="ЛКМ - Старт | ПКМ - Стоп", font=("Arial", 11, "bold"))
         self.info_label.pack(pady=5)
 
         controls_frame = tk.Frame(self.window)
@@ -72,69 +78,72 @@ class MainWindow:
         self.btn_info.pack(side=tk.LEFT, padx=5)
 
     def on_mouse_click(self, event):
-        """Обробка кліку по відео"""
         gui_x, gui_y = event.x, event.y
         scale_x = config.FRAME_WIDTH / 720
         scale_y = config.FRAME_HEIGHT / 540
         click_x = int(gui_x * scale_x)
         click_y = int(gui_y * scale_y)
         
-        print(f"Клік по: {click_x}, {click_y}")
-        
-        # При кліку ми поки не знаємо площу, вона оновиться в update_loop
         self.locked_face_center = (click_x, click_y)
         self.locked_face_area = 0 
+        self.locked_signature = None 
+        
         self.is_tracking_locked = True
+        self.is_calibrating = True
+        self.calibration_data = []
         self.lost_target_frames = 0
-        self.info_label.config(text="ЦІЛЬ ЗАХОПЛЕНО! Шукаю обличчя...", fg="blue")
+        
+        self.info_label.config(text="CALIBRATING... (Hold still)", fg="blue")
 
     def cancel_tracking(self, event=None):
-        """Скидання цілі"""
         self.is_tracking_locked = False
+        self.is_calibrating = False
         self.locked_face_center = None
-        self.locked_face_area = 0
-        self.info_label.config(text="Ціль скинуто. Режим очікування.", fg="black")
+        self.locked_signature = None
+        self.calibration_data = []
+        self.info_label.config(text="Ready.", fg="black")
 
-    def find_closest_face(self, faces, target_pos, target_area):
-        """
-        Розумний пошук цілі:
-        1. Перевіряє дистанцію (щоб не стрибало далеко).
-        2. Перевіряє площу (щоб не перемикалось на когось іншого розміру).
-        """
-        if not faces or target_pos is None:
-            return None
-        
-        closest_face = None
+    # --- МЕТОДИ ПОШУКУ ---
+    def track_by_position(self, faces, last_pos, last_area):
+        if not faces or last_pos is None: return None
+        best_face = None
         min_dist = float('inf')
-        
-        tx, ty = target_pos
+        tx, ty = last_pos
         
         for face in faces:
             fx, fy = face["center"]
             f_area = face["area"]
-            
-            # 1. Перевірка відстані
             dist = math.hypot(fx - tx, fy - ty)
             
-            # 2. Перевірка площі (якщо ми вже знаємо площу цілі)
+            # Перевірка площі
             is_area_ok = True
-            if target_area > 0:
-                # Дозволяємо зміну розміру не більше ніж на 50%
-                ratio = f_area / target_area
-                if ratio < 0.5 or ratio > 1.5:
-                    is_area_ok = False
+            if last_area > 0:
+                ratio = f_area / last_area
+                if ratio < 0.6 or ratio > 1.4: is_area_ok = False
             
-            # Якщо обличчя близько І підходить за розміром
-            if dist < min_dist and is_area_ok:
+            # Дозволяємо рух до 200 пікселів за кадр (різкі рухи)
+            if dist < min_dist and is_area_ok and dist < 200:
                 min_dist = dist
-                closest_face = face
+                best_face = face
+        return best_face
+
+    def recover_by_biometrics(self, faces, target_sig):
+        if not faces or target_sig is None: return None, 999
         
-        # Жорсткий поріг дистанції: 100 пікселів
-        # Якщо найближче обличчя далі 100 пікселів від останньої точки - це не наша людина
-        if min_dist > 100:
-            return None
+        best_candidate = None
+        best_score = 999.0
+        
+        for face in faces:
+            f_sig = face["signature"]
+            match, score = self.tracker.compare_signatures(f_sig, target_sig)
             
-        return closest_face
+            # Шукаємо кандидата з НАЙМЕНШИМ Score (найбільш схожого)
+            if score < best_score:
+                best_score = score
+                if match:
+                    best_candidate = face
+            
+        return best_candidate, best_score
 
     def update_loop(self):
         if self.grabber is not None:
@@ -145,75 +154,82 @@ class MainWindow:
                 frame_processed, faces = self.tracker.find_faces(frame_resized)
                 
                 target_face = None
+                current_score = 0.0
                 
-                # --- ЛОГІКА ТРЕКІНГУ ---
-                if self.is_tracking_locked and self.locked_face_center is not None:
-                    # Шукаємо наше обличчя серед усіх знайдених
-                    target_face = self.find_closest_face(faces, self.locked_face_center, self.locked_face_area)
+                if self.is_tracking_locked:
                     
-                    if target_face:
-                        # ЦІЛЬ ЗНАЙДЕНО
-                        self.locked_face_center = target_face["center"]
-                        self.locked_face_area = target_face["area"] # Оновлюємо поточний розмір
-                        self.lost_target_frames = 0 # Скидаємо лічильник втрати
-                        
-                        self.info_label.config(text=f"Стеження... Area: {target_face['area']}", fg="green")
-                    else:
-                        # ЦІЛЬ НЕ ЗНАЙДЕНО (в цьому кадрі)
-                        self.lost_target_frames += 1
-                        self.info_label.config(text=f"Втрата цілі! ({self.lost_target_frames}/50)", fg="orange")
-                        
-                        # Якщо цілі немає вже 50 кадрів (~2-3 секунди), скидаємо захоплення повністю
-                        if self.lost_target_frames > 50:
-                            self.cancel_tracking()
-                            messagebox.showwarning("Увага", "Ціль втрачено надовго. Трекінг вимкнено.")
+                    # 1. Позиційний трекінг (швидкий)
+                    if self.is_calibrating or self.lost_target_frames < 20:
+                        if self.locked_face_center is not None:
+                            target_face = self.track_by_position(faces, self.locked_face_center, self.locked_face_area)
+                    
+                    # 2. Біометричний пошук (відновлення)
+                    elif self.locked_signature is not None:
+                         target_face, score = self.recover_by_biometrics(faces, self.locked_signature)
+                         current_score = score
+                         self.info_label.config(text=f"SCANNING... Score: {score:.3f}", fg="purple")
 
-                # --- МАЛЮВАННЯ ТА PID ---
+                    # --- ОБРОБКА РЕЗУЛЬТАТУ ---
+                    if target_face:
+                        self.locked_face_center = target_face["center"]
+                        self.locked_face_area = target_face["area"]
+                        self.lost_target_frames = 0
+                        
+                        # --- КАЛІБРУВАННЯ ---
+                        if self.is_calibrating:
+                            self.calibration_data.append(target_face["signature"])
+                            count = len(self.calibration_data)
+                            self.info_label.config(text=f"CALIBRATING: {count}/{self.calibration_frames_target}", fg="blue")
+                            
+                            if count >= self.calibration_frames_target:
+                                # Середнє арифметичне по вектору
+                                data_np = np.array(self.calibration_data)
+                                self.locked_signature = np.mean(data_np, axis=0).tolist()
+                                self.is_calibrating = False
+                                print(f"Signature Locked: {self.locked_signature}")
+                                self.info_label.config(text="TARGET LOCKED", fg="green")
+                        
+                        elif not self.is_calibrating:
+                             # Якщо ми трекаємо позиційно, все одно можемо перевірити Score для інформації
+                             if self.locked_signature is not None:
+                                 _, sc = self.tracker.compare_signatures(target_face["signature"], self.locked_signature)
+                                 self.info_label.config(text=f"TRACKING | Score: {sc:.3f}", fg="green")
+                             
+                    else:
+                        self.lost_target_frames += 1
+                        if self.lost_target_frames > 300:
+                            self.cancel_tracking()
+                            messagebox.showwarning("Info", "Ціль втрачено")
+
+                # --- Draw & PID ---
                 pid_yaw, pid_fb, pid_ud = 0, 0, 0
-                
                 if faces:
                     for face in faces:
-                        # Чи це те обличчя, яке ми ведемо?
-                        is_locked = (face == target_face)
-                        frame_processed = self.tracker.draw_face(frame_processed, face, is_locked, self.show_mesh)
-                        
-                        if is_locked:
+                        is_target = (face == target_face)
+                        frame_processed = self.tracker.draw_face(frame_processed, face, is_target, self.show_mesh)
+                        if is_target:
                             pid_yaw, pid_fb, pid_ud = self.tracker.calculate_pid(face)
 
-                # --- КЕРУВАННЯ ДРОНОМ ---
+                # --- Control ---
                 man_lr, man_fb, man_ud, man_yaw = self.get_manual_command()
-                
-                final_lr = man_lr
-                final_fb = man_fb
-                final_ud = man_ud
-                final_yaw = man_yaw
+                final_lr, final_fb, final_ud, final_yaw = man_lr, man_fb, man_ud, man_yaw
 
-                if self.is_tracking_locked and target_face:
-                    # Автопілот працює тільки якщо ми БАЧИМО ціль прямо зараз
+                if self.is_tracking_locked and target_face and not self.is_calibrating:
                     if final_yaw == 0: final_yaw = pid_yaw
                     if final_ud == 0: final_ud = pid_ud
-                    
-                    if self.is_distance_active and final_fb == 0:
-                        final_fb = pid_fb
-                else:
-                    # Якщо ціль втрачено (але ще не скинуто повністю), дрон має зависнути
-                    # Він не повинен виконувати старі команди PID
-                    pass
-
+                    if self.is_distance_active and final_fb == 0: final_fb = pid_fb
+                
                 if self.is_flying:
                     self.tello.send_rc_control(final_lr, final_fb, final_ud, final_yaw)
                 
-                # Відображення
                 img_rgb = cv2.cvtColor(frame_processed, cv2.COLOR_BGR2RGB)
                 img_pil = Image.fromarray(img_rgb)
                 img_tk = ImageTk.PhotoImage(image=img_pil.resize((720, 540), Image.Resampling.BOX))
-                
                 self.video_label.imgtk = img_tk
                 self.video_label.configure(image=img_tk)
 
         self.window.after(10, self.update_loop)
 
-    # --- РЕШТА МЕТОДІВ (Без змін) ---
     def connect_drone(self):
         def _connect():
             try:
@@ -221,12 +237,11 @@ class MainWindow:
                 self.tello.streamoff()
                 self.tello.streamon()
                 bat = self.tello.get_battery()
-                self.info_label.config(text=f"Батарея: {bat}% | Готовий")
-                print("Запуск відео...")
+                self.info_label.config(text=f"Bat: {bat}%")
                 time.sleep(1)
                 self.grabber = VideoGrabber(config.UDP_VIDEO_ADDRESS).start()
             except Exception as e:
-                self.info_label.config(text=f"Помилка: {e}", fg="red")
+                self.info_label.config(text=f"Err: {e}", fg="red")
         threading.Thread(target=_connect, daemon=True).start()
 
     def setup_input(self):
@@ -234,13 +249,12 @@ class MainWindow:
         self.window.bind("<KeyRelease>", self.key_up)
 
     def key_down(self, event):
-        key = event.keysym.lower()
-        self.pressed_keys.add(key)
-        if key == 'space': self.land()
+        self.pressed_keys.add(event.keysym.lower())
+        if event.keysym.lower() == 'space': self.land()
 
     def key_up(self, event):
-        key = event.keysym.lower()
-        if key in self.pressed_keys: self.pressed_keys.remove(key)
+        k = event.keysym.lower()
+        if k in self.pressed_keys: self.pressed_keys.remove(k)
 
     def get_manual_command(self):
         lr, fb, ud, yv = 0, 0, 0, 0
@@ -252,21 +266,19 @@ class MainWindow:
         if 'd' in pk: lr = speed
         if 'q' in pk: yv = -speed
         if 'e' in pk: yv = speed
-        if 'shift_l' in pk or 'shift_r' in pk: ud = speed
-        if 'control_l' in pk or 'control_r' in pk: ud = -speed
+        if 'shift_l' in pk: ud = speed
+        if 'control_l' in pk: ud = -speed
         return lr, fb, ud, yv
 
     def takeoff(self):
         try:
             self.tello.takeoff()
-            self.tello.send_rc_control(0, 0, 25, 0)
+            self.tello.send_rc_control(0,0,25,0)
             self.is_flying = True
         except: pass
 
     def land(self):
-        self.is_tracking_locked = False
-        self.is_distance_active = False
-        self.update_btns()
+        self.cancel_tracking()
         try:
             self.tello.land()
             self.is_flying = False
@@ -274,17 +286,14 @@ class MainWindow:
 
     def toggle_dist(self):
         self.is_distance_active = not self.is_distance_active
-        self.update_btns()
+        self.btn_dist.config(bg="orange" if self.is_distance_active else "gray")
 
     def toggle_view(self):
         self.show_mesh = not self.show_mesh
         self.btn_view.config(text="Вигляд: Сітка" if self.show_mesh else "Вигляд: Рамка", bg="purple" if self.show_mesh else "#8e44ad")
 
-    def update_btns(self):
-        self.btn_dist.config(bg="orange" if self.is_distance_active else "gray", text="ВИМК. Наближення" if self.is_distance_active else "Увімк. Наближення")
-
     def show_help(self):
-        messagebox.showinfo("Інфо", "ЛКМ - Вибрати ціль\nПКМ - Скинути ціль\nSpace - Посадка")
+        messagebox.showinfo("Інфо", "ЛКМ - Захопити\nПКМ - Скинути\nSpace - Посадка")
         self.video_label.focus_set()
 
     def close(self):
