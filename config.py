@@ -5,16 +5,16 @@ DRONE_IP = '192.168.10.1'
 UDP_VIDEO_ADDRESS = 'udp://192.168.10.1:11111'
 
 # Налаштування зображення
-FRAME_WIDTH = 360
-FRAME_HEIGHT = 240
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
 
 # Налаштування PID контролера [Kp, Ki, Kd]
 # MediaPipe дає стабільніші координати, тому Kp можна трохи підняти
-PID_COEFFICIENTS = [0.4, 0.4, 0]
+PID_COEFFICIENTS = [0.15, 0.15, 0]
 
 # Діапазон площі обличчя [min, max]
 # Оскільки ми будемо рахувати площу по-іншому (через точки), діапазон зміниться
-FACE_AREA_RANGE = [6000, 7500]
+FACE_AREA_RANGE = [25000, 35000]
 
 # Швидкість ручного керування
 MANUAL_SPEED = 50
