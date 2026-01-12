@@ -15,31 +15,31 @@ from tracker import FaceTracker
 class MainWindow:
     def __init__(self, root):
         self.window = root
-        self.window.title("DJI Tello: Vector Biometrics")
-        self.window.geometry("900x650")
+        self.window.title("DJI Tello: Final Biometric System")
+        self.window.geometry("900x750")
 
         self.tracker = FaceTracker()
         self.grabber = None
         self.tello = Tello(host=config.DRONE_IP)
         
-        # --- СТАН ---
+        # Стан
         self.is_distance_active = False
         self.is_flying = False
         self.show_mesh = True 
         
-        # --- ПАМ'ЯТЬ ---
+        # Пам'ять
         self.locked_face_center = None 
         self.locked_face_area = 0      
         self.locked_signature = None   
         
         self.is_tracking_locked = False
-        self.lost_target_frames = 0    
         
-        # Калібрування (збираємо середнє за 20 кадрів)
+        # Калібрування
         self.is_calibrating = False
         self.calibration_data = []
         self.calibration_frames_target = 20
-
+        
+        self.last_battery_check = 0
         self.pressed_keys = set()
 
         self.setup_ui()
@@ -48,15 +48,21 @@ class MainWindow:
         self.update_loop()
 
     def setup_ui(self):
+        self.battery_label = tk.Label(self.window, text="Заряд батареї: --%", font=("Arial", 16, "bold"), fg="#333")
+        self.battery_label.pack(pady=10)
+
         self.video_label = tk.Label(self.window, bg="black")
-        self.video_label.pack(pady=10)
+        self.video_label.pack(pady=5)
         self.video_label.focus_set()
         
         self.video_label.bind("<Button-1>", self.on_mouse_click)
         self.video_label.bind("<Button-3>", self.cancel_tracking)
 
-        self.info_label = tk.Label(self.window, text="ЛКМ - Старт | ПКМ - Стоп", font=("Arial", 11, "bold"))
-        self.info_label.pack(pady=5)
+        self.status_label = tk.Label(self.window, text="Система готова. Чекаю наказу.", font=("Consolas", 14), fg="blue")
+        self.status_label.pack(pady=10)
+
+        self.info_label = tk.Label(self.window, text="ЛКМ - Захопити | ПКМ - Скинути | Space - Посадка", font=("Arial", 10), fg="gray")
+        self.info_label.pack(pady=0)
 
         controls_frame = tk.Frame(self.window)
         controls_frame.pack(side=tk.BOTTOM, pady=20)
@@ -91,122 +97,126 @@ class MainWindow:
         self.is_tracking_locked = True
         self.is_calibrating = True
         self.calibration_data = []
-        self.lost_target_frames = 0
+        self.tracker.reset_counters()
         
-        self.info_label.config(text="CALIBRATING... (Hold still)", fg="blue")
+        self.status_label.config(text="Починаю вивчення обличчя... Не рухайся!", fg="blue")
 
     def cancel_tracking(self, event=None):
         self.is_tracking_locked = False
         self.is_calibrating = False
         self.locked_face_center = None
         self.locked_signature = None
-        self.calibration_data = []
-        self.info_label.config(text="Ready.", fg="black")
+        self.tracker.reset_counters()
+        self.status_label.config(text="Стеження зупинено. Чекаю нову ціль.", fg="black")
 
-    # --- МЕТОДИ ПОШУКУ ---
     def track_by_position(self, faces, last_pos, last_area):
         if not faces or last_pos is None: return None
         best_face = None
         min_dist = float('inf')
         tx, ty = last_pos
-        
         for face in faces:
             fx, fy = face["center"]
             f_area = face["area"]
             dist = math.hypot(fx - tx, fy - ty)
             
-            # Перевірка площі
             is_area_ok = True
             if last_area > 0:
                 ratio = f_area / last_area
                 if ratio < 0.6 or ratio > 1.4: is_area_ok = False
             
-            # Дозволяємо рух до 200 пікселів за кадр (різкі рухи)
             if dist < min_dist and is_area_ok and dist < 200:
                 min_dist = dist
                 best_face = face
         return best_face
 
-    def recover_by_biometrics(self, faces, target_sig):
-        if not faces or target_sig is None: return None, 999
-        
-        best_candidate = None
-        best_score = 999.0
-        
-        for face in faces:
-            f_sig = face["signature"]
-            match, score = self.tracker.compare_signatures(f_sig, target_sig)
-            
-            # Шукаємо кандидата з НАЙМЕНШИМ Score (найбільш схожого)
-            if score < best_score:
-                best_score = score
-                if match:
-                    best_candidate = face
-            
-        return best_candidate, best_score
-
     def update_loop(self):
         if self.grabber is not None:
             frame = self.grabber.read()
             
+            if time.time() - self.last_battery_check > 5:
+                try:
+                    bat = self.tello.get_battery()
+                    color = "green" if bat > 50 else ("orange" if bat > 20 else "red")
+                    self.battery_label.config(text=f"Заряд батареї: {bat}%", fg=color)
+                    self.last_battery_check = time.time()
+                except: pass
+
             if frame is not None:
                 frame_resized = cv2.resize(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
                 frame_processed, faces = self.tracker.find_faces(frame_resized)
                 
                 target_face = None
-                current_score = 0.0
                 
                 if self.is_tracking_locked:
                     
-                    # 1. Позиційний трекінг (швидкий)
-                    if self.is_calibrating or self.lost_target_frames < 20:
+                    # === 1. КАЛІБРУВАННЯ ===
+                    if self.is_calibrating:
                         if self.locked_face_center is not None:
                             target_face = self.track_by_position(faces, self.locked_face_center, self.locked_face_area)
-                    
-                    # 2. Біометричний пошук (відновлення)
-                    elif self.locked_signature is not None:
-                         target_face, score = self.recover_by_biometrics(faces, self.locked_signature)
-                         current_score = score
-                         self.info_label.config(text=f"SCANNING... Score: {score:.3f}", fg="purple")
-
-                    # --- ОБРОБКА РЕЗУЛЬТАТУ ---
-                    if target_face:
-                        self.locked_face_center = target_face["center"]
-                        self.locked_face_area = target_face["area"]
-                        self.lost_target_frames = 0
                         
-                        # --- КАЛІБРУВАННЯ ---
-                        if self.is_calibrating:
+                        if target_face:
                             self.calibration_data.append(target_face["signature"])
                             count = len(self.calibration_data)
-                            self.info_label.config(text=f"CALIBRATING: {count}/{self.calibration_frames_target}", fg="blue")
+                            self.status_label.config(text=f"Збираю дані... {count}/{self.calibration_frames_target}", fg="blue")
                             
+                            self.locked_face_center = target_face["center"]
+                            self.locked_face_area = target_face["area"]
+
                             if count >= self.calibration_frames_target:
-                                # Середнє арифметичне по вектору
                                 data_np = np.array(self.calibration_data)
                                 self.locked_signature = np.mean(data_np, axis=0).tolist()
                                 self.is_calibrating = False
-                                print(f"Signature Locked: {self.locked_signature}")
-                                self.info_label.config(text="TARGET LOCKED", fg="green")
-                        
-                        elif not self.is_calibrating:
-                             # Якщо ми трекаємо позиційно, все одно можемо перевірити Score для інформації
-                             if self.locked_signature is not None:
-                                 _, sc = self.tracker.compare_signatures(target_face["signature"], self.locked_signature)
-                                 self.info_label.config(text=f"TRACKING | Score: {sc:.3f}", fg="green")
-                             
-                    else:
-                        self.lost_target_frames += 1
-                        if self.lost_target_frames > 300:
-                            self.cancel_tracking()
-                            messagebox.showwarning("Info", "Ціль втрачено")
+                                self.tracker.reset_counters()
+                                self.status_label.config(text="Обличчя вивчено. Починаю стеження.", fg="green")
+                        else:
+                            self.status_label.config(text="Не бачу обличчя для калібрування!", fg="red")
 
-                # --- Draw & PID ---
+                    # === 2. СТЕЖЕННЯ ===
+                    else:
+                        best_candidate = None
+                        best_score = 999.0
+                        
+                        # Знаходимо найкращого кандидата
+                        for face in faces:
+                            score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
+                            if score < best_score:
+                                best_score = score
+                                best_candidate = face
+                        
+                        # Відправляємо найкращого на валідацію
+                        cand_sig = best_candidate["signature"] if best_candidate else None
+                        
+                        is_verified_target, msg = self.tracker.validate_match(
+                            cand_sig, 
+                            self.locked_signature, 
+                            is_already_locked=(self.locked_face_center is not None)
+                        )
+                        
+                        self.status_label.config(text=msg, fg="green" if is_verified_target else "purple")
+
+                        if is_verified_target and best_candidate:
+                            target_face = best_candidate
+                            self.locked_face_center = target_face["center"]
+                            self.locked_face_area = target_face["area"]
+                        else:
+                            target_face = None
+                            if "Втрачено довіру" in msg:
+                                self.locked_face_center = None 
+
+                # --- МАЛЮВАННЯ ТА PID ---
                 pid_yaw, pid_fb, pid_ud = 0, 0, 0
                 if faces:
                     for face in faces:
+                        # 1. Рахуємо SCORE для кожного обличчя (якщо є еталон)
+                        face_score = None
+                        if self.locked_signature is not None:
+                             face_score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
+                        
+                        # 2. Малюємо обличчя + Score
                         is_target = (face == target_face)
-                        frame_processed = self.tracker.draw_face(frame_processed, face, is_target, self.show_mesh)
+                        frame_processed = self.tracker.draw_face(frame_processed, face, is_target, self.show_mesh, score=face_score)
+                        
+                        # 3. PID
                         if is_target:
                             pid_yaw, pid_fb, pid_ud = self.tracker.calculate_pid(face)
 
@@ -237,11 +247,11 @@ class MainWindow:
                 self.tello.streamoff()
                 self.tello.streamon()
                 bat = self.tello.get_battery()
-                self.info_label.config(text=f"Bat: {bat}%")
+                self.battery_label.config(text=f"Заряд батареї: {bat}%")
                 time.sleep(1)
                 self.grabber = VideoGrabber(config.UDP_VIDEO_ADDRESS).start()
             except Exception as e:
-                self.info_label.config(text=f"Err: {e}", fg="red")
+                self.status_label.config(text=f"Помилка підключення: {e}", fg="red")
         threading.Thread(target=_connect, daemon=True).start()
 
     def setup_input(self):
@@ -275,6 +285,7 @@ class MainWindow:
             self.tello.takeoff()
             self.tello.send_rc_control(0,0,25,0)
             self.is_flying = True
+            self.status_label.config(text="Зліт виконано!", fg="green")
         except: pass
 
     def land(self):
@@ -282,6 +293,7 @@ class MainWindow:
         try:
             self.tello.land()
             self.is_flying = False
+            self.status_label.config(text="Посадка...", fg="red")
         except: pass
 
     def toggle_dist(self):
