@@ -5,13 +5,13 @@ import numpy as np
 import math
 import config
 
-# --- НАЛАШТУВАННЯ БІОМЕТРІЇ ---
-BIOMETRIC_THRESHOLD = 0.1
+# Налаштування біометрії
+BIOMETRIC_THRESHOLD = 0.1 
 CONFIDENCE_FRAMES = 30      
 
 class FaceTracker:
     def __init__(self):
-        self.detector = FaceMeshDetector(maxFaces=5)
+        self.detector = FaceMeshDetector(maxFaces=5, minDetectionCon=0.1, minTrackCon=0.5)
         
         self.pid = config.PID_COEFFICIENTS
         self.pError = 0
@@ -28,6 +28,7 @@ class FaceTracker:
         self.consecutive_mismatch_frames = 0
 
     def find_faces(self, img):
+        # draw=False -> Трекер не малює, він тільки шукає
         img, faces = self.detector.findFaceMesh(img, draw=False) 
         processed_faces = []
 
@@ -119,38 +120,6 @@ class FaceTracker:
                     self.consecutive_match_frames -= 1
                 msg = "Шукаю..."
             return False, msg
-
-    def draw_face(self, img, face_data, is_locked=False, draw_mesh=True, score=None):
-        cx, cy = face_data["center"]
-        x1, y1, x2, y2 = face_data["bbox"]
-        
-        color = (0, 0, 255) if is_locked else (0, 255, 0)
-        
-        if draw_mesh:
-            for point in face_data["id"]:
-                cv2.circle(img, point, 1, color, cv2.FILLED)
-        else:
-            pad = 10
-            cv2.rectangle(img, (x1-pad, y1-pad), (x2+pad, y2+pad), color, 2)
-        
-        # --- МАЛЮВАННЯ ТЕКСТУ ---
-        
-        # 1. Статус (LOCKED / Scanning) - Над самою рамкою
-        label = "LOCKED" if is_locked else ""
-        cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        
-        # 2. SCORE - Ще вище над рамкою (Жовтим)
-        if score is not None:
-            score_text = f"Diff: {score:.3f}"
-            # Колір Score: Зелений якщо < 0.15, Червоний якщо більше
-            score_color = (0, 255, 0) if score < BIOMETRIC_THRESHOLD else (0, 0, 255)
-            cv2.putText(img, score_text, (x1, y1-35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, score_color, 2)
-        
-        if is_locked:
-            cv2.line(img, (cx-10, cy), (cx+10, cy), (0, 0, 255), 2)
-            cv2.line(img, (cx, cy-10), (cx, cy+10), (0, 0, 255), 2)
-
-        return img
 
     def calculate_pid(self, face_data):
         if face_data is None: return 0, 0, 0
