@@ -1,5 +1,5 @@
-import tkinter as tk
-from tkinter import messagebox
+import customtkinter as ctk
+import tkinter.messagebox as messagebox
 from PIL import Image, ImageTk
 import cv2
 import time
@@ -10,14 +10,18 @@ from djitellopy import Tello
 
 import config
 from videograbber import VideoGrabber
-from tracker import FaceTracker
+from tracker import FaceTracker, BIOMETRIC_THRESHOLD
+
+# Налаштування вигляду CustomTkinter
+ctk.set_appearance_mode("dark")  # Темна тема
+ctk.set_default_color_theme("blue")  # Синій акцент
 
 class MainWindow:
     def __init__(self, root):
         self.window = root
-        self.window.title("DJI Tello: Final Biometric System")
-        self.window.geometry("900x750")
-
+        self.window.title("Супровід Доповідача | Автономна система")
+        self.window.geometry("950x800")
+        
         self.tracker = FaceTracker()
         self.grabber = None
         self.tello = Tello(host=config.DRONE_IP)
@@ -48,40 +52,85 @@ class MainWindow:
         self.update_loop()
 
     def setup_ui(self):
-        self.battery_label = tk.Label(self.window, text="Заряд батареї: --%", font=("Arial", 16, "bold"), fg="#333")
-        self.battery_label.pack(pady=10)
+        # Головний шрифт для статусів
+        font_main = ctk.CTkFont(family="Roboto", size=18, weight="bold")
+        font_status = ctk.CTkFont(family="Consolas", size=16)
 
-        self.video_label = tk.Label(self.window, bg="black")
-        self.video_label.pack(pady=5)
+        # 1. БАТАРЕЯ (Верхня панель)
+        self.battery_label = ctk.CTkLabel(
+            self.window, 
+            text="Заряд батареї: --%", 
+            font=font_main, 
+            text_color="#a8a8a8"
+        )
+        self.battery_label.pack(pady=(15, 5))
+
+        # 2. ВІДЕО
+        # У CTkLabel обов'язково текст="", щоб він не перекривав відео
+        self.video_label = ctk.CTkLabel(self.window, text="", fg_color="black", corner_radius=10)
+        self.video_label.pack(pady=10)
         self.video_label.focus_set()
         
         self.video_label.bind("<Button-1>", self.on_mouse_click)
         self.video_label.bind("<Button-3>", self.cancel_tracking)
 
-        self.status_label = tk.Label(self.window, text="Система готова. Чекаю наказу.", font=("Consolas", 14), fg="blue")
-        self.status_label.pack(pady=10)
+        # 3. СТАТУС
+        self.status_label = ctk.CTkLabel(
+            self.window, 
+            text="Система готова. Чекаю наказу.", 
+            font=font_status, 
+            text_color="#1f6aa5"
+        )
+        self.status_label.pack(pady=5)
 
-        self.info_label = tk.Label(self.window, text="ЛКМ - Захопити | ПКМ - Скинути | Space - Посадка", font=("Arial", 10), fg="gray")
-        self.info_label.pack(pady=0)
+        # 4. ІНФО
+        self.info_label = ctk.CTkLabel(
+            self.window, 
+            text="ЛКМ: Захопити | ПКМ: Скинути ціль | Space: Екстрена посадка | WASD+Shift/Ctrl: Ручне керування", 
+            font=ctk.CTkFont(size=12), 
+            text_color="gray"
+        )
+        self.info_label.pack(pady=5)
 
-        controls_frame = tk.Frame(self.window)
-        controls_frame.pack(side=tk.BOTTOM, pady=20)
-        btn_opts = {"width": 15, "padx": 10, "pady": 5}
+        # 5. ПАНЕЛЬ КНОПОК
+        controls_frame = ctk.CTkFrame(self.window, fg_color="transparent")
+        controls_frame.pack(side="bottom", fill="x", pady=20, padx=20)
+        
+        # Центрування кнопок
+        controls_frame.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
 
-        self.btn_takeoff = tk.Button(controls_frame, text="ЗЛІТ", bg="green", fg="white", command=self.takeoff, **btn_opts)
-        self.btn_takeoff.pack(side=tk.LEFT, padx=5)
+        btn_opts = {"height": 40, "corner_radius": 8, "font": ctk.CTkFont(weight="bold")}
 
-        self.btn_land = tk.Button(controls_frame, text="ПОСАДКА", bg="red", fg="white", command=self.land, **btn_opts)
-        self.btn_land.pack(side=tk.LEFT, padx=5)
+        self.btn_takeoff = ctk.CTkButton(
+            controls_frame, text="ЗЛІТ", fg_color="#28a745", hover_color="#218838", 
+            command=self.takeoff, **btn_opts
+        )
+        self.btn_takeoff.grid(row=0, column=0, padx=10)
 
-        self.btn_dist = tk.Button(controls_frame, text="Увімк. Наближення", bg="gray", command=self.toggle_dist, **btn_opts)
-        self.btn_dist.pack(side=tk.LEFT, padx=5)
+        self.btn_land = ctk.CTkButton(
+            controls_frame, text="ПОСАДКА", fg_color="#dc3545", hover_color="#c82333", 
+            command=self.land, **btn_opts
+        )
+        self.btn_land.grid(row=0, column=1, padx=10)
 
-        self.btn_view = tk.Button(controls_frame, text="Вигляд: Сітка", bg="purple", fg="white", command=self.toggle_view, **btn_opts)
-        self.btn_view.pack(side=tk.LEFT, padx=5)
+        self.btn_dist = ctk.CTkButton(
+            controls_frame, text="Дистанція: ВИМК", fg_color="#6c757d", hover_color="#5a6268", 
+            command=self.toggle_dist, **btn_opts
+        )
+        self.btn_dist.grid(row=0, column=2, padx=10)
 
-        self.btn_info = tk.Button(controls_frame, text="Інфо", bg="#007acc", fg="white", command=self.show_help, **btn_opts)
-        self.btn_info.pack(side=tk.LEFT, padx=5)
+        self.btn_view = ctk.CTkButton(
+            controls_frame, text="Вигляд: Сітка", fg_color="#6f42c1", hover_color="#59339d", 
+            command=self.toggle_view, **btn_opts
+        )
+        self.btn_view.grid(row=0, column=3, padx=10)
+
+        self.btn_info = ctk.CTkButton(
+            controls_frame, text="Довідка", fg_color="#17a2b8", hover_color="#138496", 
+            command=self.show_help, **btn_opts
+        )
+        self.btn_info.grid(row=0, column=4, padx=10)
+
 
     def on_mouse_click(self, event):
         gui_x, gui_y = event.x, event.y
@@ -99,7 +148,7 @@ class MainWindow:
         self.calibration_data = []
         self.tracker.reset_counters()
         
-        self.status_label.config(text="Починаю вивчення обличчя... Не рухайся!", fg="blue")
+        self.status_label.configure(text="Починаю вивчення обличчя... Не рухайся!", text_color="#1f6aa5")
 
     def cancel_tracking(self, event=None):
         self.is_tracking_locked = False
@@ -107,7 +156,7 @@ class MainWindow:
         self.locked_face_center = None
         self.locked_signature = None
         self.tracker.reset_counters()
-        self.status_label.config(text="Стеження зупинено. Чекаю нову ціль.", fg="black")
+        self.status_label.configure(text="Стеження зупинено. Чекаю нову ціль.", text_color="gray")
 
     def track_by_position(self, faces, last_pos, last_area):
         if not faces or last_pos is None: return None
@@ -129,6 +178,33 @@ class MainWindow:
                 best_face = face
         return best_face
 
+    def draw_face_on_image(self, img, face_data, is_locked=False, draw_mesh=True, score=None):
+        cx, cy = face_data["center"]
+        x1, y1, x2, y2 = face_data["bbox"]
+        
+        color = (0, 0, 255) if is_locked else (0, 255, 0)
+        
+        if draw_mesh:
+            for point in face_data["id"]:
+                cv2.circle(img, point, 1, color, cv2.FILLED)
+        else:
+            pad = 10
+            cv2.rectangle(img, (x1-pad, y1-pad), (x2+pad, y2+pad), color, 2)
+        
+        label = "LOCKED" if is_locked else ""
+        cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        
+        if score is not None:
+            score_text = f"Diff: {score:.3f}"
+            score_color = (0, 255, 0) if score < BIOMETRIC_THRESHOLD else (0, 0, 255)
+            cv2.putText(img, score_text, (x1, y1-35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, score_color, 2)
+        
+        if is_locked:
+            cv2.line(img, (cx-10, cy), (cx+10, cy), (0, 0, 255), 2)
+            cv2.line(img, (cx, cy-10), (cx, cy+10), (0, 0, 255), 2)
+
+        return img
+
     def update_loop(self):
         if self.grabber is not None:
             frame = self.grabber.read()
@@ -136,8 +212,8 @@ class MainWindow:
             if time.time() - self.last_battery_check > 5:
                 try:
                     bat = self.tello.get_battery()
-                    color = "green" if bat > 50 else ("orange" if bat > 20 else "red")
-                    self.battery_label.config(text=f"Заряд батареї: {bat}%", fg=color)
+                    b_color = "#28a745" if bat > 50 else ("#ffc107" if bat > 20 else "#dc3545")
+                    self.battery_label.configure(text=f"Заряд батареї: {bat}%", text_color=b_color)
                     self.last_battery_check = time.time()
                 except: pass
 
@@ -149,7 +225,6 @@ class MainWindow:
                 
                 if self.is_tracking_locked:
                     
-                    # === 1. КАЛІБРУВАННЯ ===
                     if self.is_calibrating:
                         if self.locked_face_center is not None:
                             target_face = self.track_by_position(faces, self.locked_face_center, self.locked_face_area)
@@ -157,7 +232,7 @@ class MainWindow:
                         if target_face:
                             self.calibration_data.append(target_face["signature"])
                             count = len(self.calibration_data)
-                            self.status_label.config(text=f"Збираю дані... {count}/{self.calibration_frames_target}", fg="blue")
+                            self.status_label.configure(text=f"Збираю дані... {count}/{self.calibration_frames_target}", text_color="#1f6aa5")
                             
                             self.locked_face_center = target_face["center"]
                             self.locked_face_area = target_face["area"]
@@ -167,23 +242,20 @@ class MainWindow:
                                 self.locked_signature = np.mean(data_np, axis=0).tolist()
                                 self.is_calibrating = False
                                 self.tracker.reset_counters()
-                                self.status_label.config(text="Обличчя вивчено. Починаю стеження.", fg="green")
+                                self.status_label.configure(text="Обличчя вивчено. Починаю стеження.", text_color="#28a745")
                         else:
-                            self.status_label.config(text="Не бачу обличчя для калібрування!", fg="red")
+                            self.status_label.configure(text="Не бачу обличчя для калібрування!", text_color="#dc3545")
 
-                    # === 2. СТЕЖЕННЯ ===
                     else:
                         best_candidate = None
                         best_score = 999.0
                         
-                        # Знаходимо найкращого кандидата
                         for face in faces:
                             score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
                             if score < best_score:
                                 best_score = score
                                 best_candidate = face
                         
-                        # Відправляємо найкращого на валідацію
                         cand_sig = best_candidate["signature"] if best_candidate else None
                         
                         is_verified_target, msg = self.tracker.validate_match(
@@ -192,7 +264,8 @@ class MainWindow:
                             is_already_locked=(self.locked_face_center is not None)
                         )
                         
-                        self.status_label.config(text=msg, fg="green" if is_verified_target else "purple")
+                        status_color = "#28a745" if is_verified_target else "#fd7e14"
+                        self.status_label.configure(text=msg, text_color=status_color)
 
                         if is_verified_target and best_candidate:
                             target_face = best_candidate
@@ -203,24 +276,22 @@ class MainWindow:
                             if "Втрачено довіру" in msg:
                                 self.locked_face_center = None 
 
-                # --- МАЛЮВАННЯ ТА PID ---
                 pid_yaw, pid_fb, pid_ud = 0, 0, 0
                 if faces:
                     for face in faces:
-                        # 1. Рахуємо SCORE для кожного обличчя (якщо є еталон)
                         face_score = None
                         if self.locked_signature is not None:
                              face_score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
                         
-                        # 2. Малюємо обличчя + Score
                         is_target = (face == target_face)
-                        frame_processed = self.tracker.draw_face(frame_processed, face, is_target, self.show_mesh, score=face_score)
                         
-                        # 3. PID
+                        frame_processed = self.draw_face_on_image(
+                            frame_processed, face, is_target, self.show_mesh, score=face_score
+                        )
+                        
                         if is_target:
                             pid_yaw, pid_fb, pid_ud = self.tracker.calculate_pid(face)
 
-                # --- Control ---
                 man_lr, man_fb, man_ud, man_yaw = self.get_manual_command()
                 final_lr, final_fb, final_ud, final_yaw = man_lr, man_fb, man_ud, man_yaw
 
@@ -234,9 +305,10 @@ class MainWindow:
                 
                 img_rgb = cv2.cvtColor(frame_processed, cv2.COLOR_BGR2RGB)
                 img_pil = Image.fromarray(img_rgb)
-                img_tk = ImageTk.PhotoImage(image=img_pil.resize((720, 540), Image.Resampling.BOX))
-                self.video_label.imgtk = img_tk
+                img_tk = ctk.CTkImage(light_image=img_pil, dark_image=img_pil, size=(720, 540))
+                
                 self.video_label.configure(image=img_tk)
+                self.video_label.image = img_tk
 
         self.window.after(10, self.update_loop)
 
@@ -247,11 +319,11 @@ class MainWindow:
                 self.tello.streamoff()
                 self.tello.streamon()
                 bat = self.tello.get_battery()
-                self.battery_label.config(text=f"Заряд батареї: {bat}%")
+                self.battery_label.configure(text=f"Заряд батареї: {bat}%")
                 time.sleep(1)
                 self.grabber = VideoGrabber(config.UDP_VIDEO_ADDRESS).start()
             except Exception as e:
-                self.status_label.config(text=f"Помилка підключення: {e}", fg="red")
+                self.status_label.configure(text=f"Помилка підключення: {e}", text_color="#dc3545")
         threading.Thread(target=_connect, daemon=True).start()
 
     def setup_input(self):
@@ -285,7 +357,7 @@ class MainWindow:
             self.tello.takeoff()
             self.tello.send_rc_control(0,0,25,0)
             self.is_flying = True
-            self.status_label.config(text="Зліт виконано!", fg="green")
+            self.status_label.configure(text="Зліт виконано!", text_color="#28a745")
         except: pass
 
     def land(self):
@@ -293,19 +365,25 @@ class MainWindow:
         try:
             self.tello.land()
             self.is_flying = False
-            self.status_label.config(text="Посадка...", fg="red")
+            self.status_label.configure(text="Посадка...", text_color="#dc3545")
         except: pass
 
     def toggle_dist(self):
         self.is_distance_active = not self.is_distance_active
-        self.btn_dist.config(bg="orange" if self.is_distance_active else "gray")
+        if self.is_distance_active:
+            self.btn_dist.configure(text="Дистанція: УВІМК", fg_color="#fd7e14", hover_color="#e36209")
+        else:
+            self.btn_dist.configure(text="Дистанція: ВИМК", fg_color="#6c757d", hover_color="#5a6268")
 
     def toggle_view(self):
         self.show_mesh = not self.show_mesh
-        self.btn_view.config(text="Вигляд: Сітка" if self.show_mesh else "Вигляд: Рамка", bg="purple" if self.show_mesh else "#8e44ad")
+        if self.show_mesh:
+            self.btn_view.configure(text="Вигляд: Сітка", fg_color="#6f42c1", hover_color="#59339d")
+        else:
+            self.btn_view.configure(text="Вигляд: Рамка", fg_color="#007bff", hover_color="#0056b3")
 
     def show_help(self):
-        messagebox.showinfo("Інфо", "ЛКМ - Захопити\nПКМ - Скинути\nSpace - Посадка")
+        messagebox.showinfo("Інфо", "ЛКМ: Захопити ціль\nПКМ: Скинути ціль\nSpace: Посадка")
         self.video_label.focus_set()
 
     def close(self):
