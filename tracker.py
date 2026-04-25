@@ -21,11 +21,9 @@ class FaceTracker:
         
         # Лічильники
         self.consecutive_match_frames = 0    
-        self.consecutive_mismatch_frames = 0 
 
     def reset_counters(self):
         self.consecutive_match_frames = 0
-        self.consecutive_mismatch_frames = 0
 
     def find_faces(self, img):
         # draw=False -> Трекер не малює, він тільки шукає
@@ -94,32 +92,27 @@ class FaceTracker:
         return diff_1 + diff_2 + diff_3 + diff_4 + diff_5
 
     def validate_match(self, current_sig, target_sig, is_already_locked):
+        # Якщо ми вже захопили ціль, ми ВЗАГАЛІ не рахуємо Score. 
+        # Довіряємо виключно просторовому трекінгу з gui.py
+        if is_already_locked:
+            self.reset_counters()
+            return True, "Стежу за ціллю."
+
+        # Якщо ми в режимі пошуку: рахуємо Score і накопичуємо кадри
         score = self.compare_signatures(current_sig, target_sig)
         
-        if is_already_locked:
-            if score > BIOMETRIC_THRESHOLD:
-                self.consecutive_mismatch_frames += 1
-                msg = f"Сумніваюся... ({self.consecutive_mismatch_frames}/{CONFIDENCE_FRAMES})"
-                if self.consecutive_mismatch_frames > CONFIDENCE_FRAMES:
-                    self.reset_counters()
-                    return False, "Втрачено довіру (чуже обличчя)"
-            else:
-                self.consecutive_mismatch_frames = 0
-                msg = "Стежу за ціллю."
-            return True, msg 
-
+        if score < BIOMETRIC_THRESHOLD:
+            self.consecutive_match_frames += 1
+            msg = f"Перевірка... ({self.consecutive_match_frames}/{CONFIDENCE_FRAMES})"
+            if self.consecutive_match_frames >= CONFIDENCE_FRAMES:
+                self.reset_counters()
+                return True, "Ціль підтверджено!"
         else:
-            if score < BIOMETRIC_THRESHOLD:
-                self.consecutive_match_frames += 1
-                msg = f"Перевірка... ({self.consecutive_match_frames}/{CONFIDENCE_FRAMES})"
-                if self.consecutive_match_frames > CONFIDENCE_FRAMES:
-                    self.reset_counters()
-                    return True, "Ціль підтверджено!"
-            else:
-                if self.consecutive_match_frames > 0:
-                    self.consecutive_match_frames -= 1
-                msg = "Шукаю..."
-            return False, msg
+            if self.consecutive_match_frames > 0:
+                self.consecutive_match_frames -= 1
+            msg = "Шукаю..."
+            
+        return False, msg
 
     def calculate_pid(self, face_data):
         if face_data is None: return 0, 0, 0
