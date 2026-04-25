@@ -19,7 +19,7 @@ ctk.set_default_color_theme("blue")  # Синій акцент
 class MainWindow:
     def __init__(self, root):
         self.window = root
-        self.window.title("Супровід Доповідача | Автономна система")
+        self.window.title("Tello Face Tracker")
         self.window.geometry("950x800")
         
         self.tracker = FaceTracker()
@@ -66,7 +66,6 @@ class MainWindow:
         self.battery_label.pack(pady=(15, 5))
 
         # 2. ВІДЕО
-        # У CTkLabel обов'язково текст="", щоб він не перекривав відео
         self.video_label = ctk.CTkLabel(self.window, text="", fg_color="black", corner_radius=10)
         self.video_label.pack(pady=10)
         self.video_label.focus_set()
@@ -77,26 +76,16 @@ class MainWindow:
         # 3. СТАТУС
         self.status_label = ctk.CTkLabel(
             self.window, 
-            text="Система готова. Чекаю наказу.", 
+            text="Система готова до роботи", 
             font=font_status, 
             text_color="#1f6aa5"
         )
         self.status_label.pack(pady=5)
 
-        # 4. ІНФО
-        self.info_label = ctk.CTkLabel(
-            self.window, 
-            text="ЛКМ: Захопити | ПКМ: Скинути ціль | Space: Екстрена посадка | WASD+Shift/Ctrl: Ручне керування", 
-            font=ctk.CTkFont(size=12), 
-            text_color="gray"
-        )
-        self.info_label.pack(pady=5)
-
-        # 5. ПАНЕЛЬ КНОПОК
+        # 4. ПАНЕЛЬ КНОПОК
         controls_frame = ctk.CTkFrame(self.window, fg_color="transparent")
         controls_frame.pack(side="bottom", fill="x", pady=20, padx=20)
         
-        # Центрування кнопок
         controls_frame.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         btn_opts = {"height": 40, "corner_radius": 8, "font": ctk.CTkFont(weight="bold")}
@@ -114,7 +103,7 @@ class MainWindow:
         self.btn_land.grid(row=0, column=1, padx=10)
 
         self.btn_dist = ctk.CTkButton(
-            controls_frame, text="Дистанція: ВИМК", fg_color="#6c757d", hover_color="#5a6268", 
+            controls_frame, text="Супровід: ВИМК", fg_color="#6c757d", hover_color="#5a6268", 
             command=self.toggle_dist, **btn_opts
         )
         self.btn_dist.grid(row=0, column=2, padx=10)
@@ -130,7 +119,6 @@ class MainWindow:
             command=self.show_help, **btn_opts
         )
         self.btn_info.grid(row=0, column=4, padx=10)
-
 
     def on_mouse_click(self, event):
         gui_x, gui_y = event.x, event.y
@@ -148,7 +136,7 @@ class MainWindow:
         self.calibration_data = []
         self.tracker.reset_counters()
         
-        self.status_label.configure(text="Починаю вивчення обличчя... Не рухайся!", text_color="#1f6aa5")
+        self.status_label.configure(text="Сканування обличчя...", text_color="#1f6aa5")
 
     def cancel_tracking(self, event=None):
         self.is_tracking_locked = False
@@ -156,7 +144,7 @@ class MainWindow:
         self.locked_face_center = None
         self.locked_signature = None
         self.tracker.reset_counters()
-        self.status_label.configure(text="Стеження зупинено. Чекаю нову ціль.", text_color="gray")
+        self.status_label.configure(text="Відстеження зупинено. Чекаю нову ціль.", text_color="gray")
 
     def track_by_position(self, faces, last_pos, last_area):
         if not faces or last_pos is None: return None
@@ -209,7 +197,7 @@ class MainWindow:
         if self.grabber is not None:
             frame = self.grabber.read()
             
-            if time.time() - self.last_battery_check > 5:
+            if time.time() > 5:
                 try:
                     bat = self.tello.get_battery()
                     b_color = "#28a745" if bat > 50 else ("#ffc107" if bat > 20 else "#dc3545")
@@ -232,7 +220,7 @@ class MainWindow:
                         if target_face:
                             self.calibration_data.append(target_face["signature"])
                             count = len(self.calibration_data)
-                            self.status_label.configure(text=f"Збираю дані... {count}/{self.calibration_frames_target}", text_color="#1f6aa5")
+                            self.status_label.configure(text=f"Збір даних... {count}/{self.calibration_frames_target}", text_color="#1f6aa5")
                             
                             self.locked_face_center = target_face["center"]
                             self.locked_face_area = target_face["area"]
@@ -242,45 +230,61 @@ class MainWindow:
                                 self.locked_signature = np.mean(data_np, axis=0).tolist()
                                 self.is_calibrating = False
                                 self.tracker.reset_counters()
-                                self.status_label.configure(text="Обличчя вивчено. Починаю стеження.", text_color="#28a745")
+                                self.status_label.configure(text="Обличчя проскановано. Початок відстеження.", text_color="#28a745")
                         else:
-                            self.status_label.configure(text="Не бачу обличчя для калібрування!", text_color="#dc3545")
+                            self.status_label.configure(text="Не виявлено обличчя для калібрування", text_color="#dc3545")
 
                     else:
-                        best_candidate = None
-                        best_score = 999.0
+                        # --- НОВА ЛОГІКА ТРЕКІНГУ ---
                         
-                        for face in faces:
-                            score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
-                            if score < best_score:
-                                best_score = score
-                                best_candidate = face
+                        # Режим 1: Ціль у кадрі, використовуємо тільки просторовий трекінг
+                        if self.locked_face_center is not None:
+                            target_face = self.track_by_position(faces, self.locked_face_center, self.locked_face_area)
+                            
+                            if target_face:
+                                self.locked_face_center = target_face["center"]
+                                self.locked_face_area = target_face["area"]
+                                self.status_label.configure(text="Відстеження цілі...", text_color="#28a745")
+                            else:
+                                # Ціль втрачено (вийшла за кадр або різко смикнулась)
+                                self.locked_face_center = None
+                                self.tracker.reset_counters()
+                                self.status_label.configure(text="Ціль втрачено. Пошук...", text_color="#fd7e14")
                         
-                        cand_sig = best_candidate["signature"] if best_candidate else None
-                        
-                        is_verified_target, msg = self.tracker.validate_match(
-                            cand_sig, 
-                            self.locked_signature, 
-                            is_already_locked=(self.locked_face_center is not None)
-                        )
-                        
-                        status_color = "#28a745" if is_verified_target else "#fd7e14"
-                        self.status_label.configure(text=msg, text_color=status_color)
-
-                        if is_verified_target and best_candidate:
-                            target_face = best_candidate
-                            self.locked_face_center = target_face["center"]
-                            self.locked_face_area = target_face["area"]
+                        # Режим 2: Ціль втрачено, використовуємо біометричний пошук
                         else:
-                            target_face = None
-                            if "Втрачено довіру" in msg:
-                                self.locked_face_center = None 
+                            best_candidate = None
+                            best_score = 999.0
+                            
+                            for face in faces:
+                                score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
+                                if score < best_score:
+                                    best_score = score
+                                    best_candidate = face
+                            
+                            cand_sig = best_candidate["signature"] if best_candidate else None
+                            
+                            is_verified_target, msg = self.tracker.validate_match(
+                                cand_sig, 
+                                self.locked_signature, 
+                                is_already_locked=False
+                            )
+                            
+                            status_color = "#28a745" if is_verified_target else "#fd7e14"
+                            self.status_label.configure(text=msg, text_color=status_color)
 
+                            if is_verified_target and best_candidate:
+                                target_face = best_candidate
+                                self.locked_face_center = target_face["center"]
+                                self.locked_face_area = target_face["area"]
+
+                # --- ВІДОБРАЖЕННЯ ТА КЕРУВАННЯ ---
                 pid_yaw, pid_fb, pid_ud = 0, 0, 0
                 if faces:
                     for face in faces:
                         face_score = None
-                        if self.locked_signature is not None:
+                        # Рахуємо та показуємо Score ТІЛЬКИ коли система шукає втрачене обличчя
+                        if self.locked_signature is not None and self.locked_face_center is None:
                              face_score = self.tracker.compare_signatures(face["signature"], self.locked_signature)
                         
                         is_target = (face == target_face)
@@ -357,7 +361,7 @@ class MainWindow:
             self.tello.takeoff()
             self.tello.send_rc_control(0,0,25,0)
             self.is_flying = True
-            self.status_label.configure(text="Зліт виконано!", text_color="#28a745")
+            self.status_label.configure(text="Зліт виконано", text_color="#28a745")
         except: pass
 
     def land(self):
@@ -371,9 +375,9 @@ class MainWindow:
     def toggle_dist(self):
         self.is_distance_active = not self.is_distance_active
         if self.is_distance_active:
-            self.btn_dist.configure(text="Дистанція: УВІМК", fg_color="#fd7e14", hover_color="#e36209")
+            self.btn_dist.configure(text="Супровід: УВІМК", fg_color="#fd7e14", hover_color="#e36209")
         else:
-            self.btn_dist.configure(text="Дистанція: ВИМК", fg_color="#6c757d", hover_color="#5a6268")
+            self.btn_dist.configure(text="Супровід: ВИМК", fg_color="#6c757d", hover_color="#5a6268")
 
     def toggle_view(self):
         self.show_mesh = not self.show_mesh
@@ -383,7 +387,7 @@ class MainWindow:
             self.btn_view.configure(text="Вигляд: Рамка", fg_color="#007bff", hover_color="#0056b3")
 
     def show_help(self):
-        messagebox.showinfo("Інфо", "ЛКМ: Захопити ціль\nПКМ: Скинути ціль\nSpace: Посадка")
+        messagebox.showinfo("Інфо", "ЛКМ по обличчі: Захопити ціль\nПКМ: Скинути ціль\nПробіл: Посадка\nWASD: Рух вперед/назад/вліво/вправо\nQ/E: Поворот проти/за годинниковою стрілкою\nShift/Ctrl: Вгору/вниз")
         self.video_label.focus_set()
 
     def close(self):
